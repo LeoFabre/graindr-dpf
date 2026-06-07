@@ -1,0 +1,9 @@
+/build/
+/build-*/
+*.vst3
+*.lv2
+*.clap
+.DS_Store
+
+# ephemeral null-test artifacts
+test/fixtures/*.wav
