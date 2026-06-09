@@ -5,6 +5,7 @@
 #include "CircularBuffer.hpp"
 #include "SmoothedValue.hpp"
 #include "VASVFilter.hpp"
+#include "FastMath.hpp"
 
 namespace graindr {
 
@@ -177,7 +178,7 @@ private:
 
     inline float softClipper(float x)
     {
-        return std::tanh(x);
+        return FastMath::tanh(x);
     }
 
     inline void resample(float inputSize, int outputSize, float factor);
