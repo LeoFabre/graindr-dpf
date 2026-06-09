@@ -1,4 +1,5 @@
 #include "GraindrPlugin.hpp"
+#include "DenormalGuard.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -121,9 +122,10 @@ void GraindrPlugin::pushParamsToDsp() {
 }
 
 void GraindrPlugin::run(const float** inputs, float** outputs, uint32_t frames) {
+    ftz::armOnce();
     for (int ch=0; ch<2; ++ch) {
-        const float* in = inputs[ch];
-        float* out = outputs[ch];
+        const float* __restrict in = inputs[ch];
+        float* __restrict out = outputs[ch];
         for (uint32_t n=0; n<frames; ++n) out[n] = in[n];   // copy dry into work buffer
         container_[ch].processBlock(out, (int)frames);       // wet in place
         for (uint32_t n=0; n<frames; ++n) out[n] = dwMixer_[ch].mix(in[n], out[n]);

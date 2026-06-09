@@ -8,7 +8,7 @@ namespace graindr {
 inline float peakGainForQ(float q) {
     if (q <= 0.707f) return 1.0f;
     auto q2 = q * q;
-    return q2 / std::pow(q2 - 0.25f, 0.5f);
+    return q2 / std::sqrt(q2 - 0.25f);
 }
 
 class StaticVASVFilter {

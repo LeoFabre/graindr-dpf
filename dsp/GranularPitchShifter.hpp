@@ -181,7 +181,7 @@ private:
     }
 
     inline void resample(float inputSize, int outputSize, float factor);
-    inline float windowFunc(int n, int outputSize, int overlapWidth);
+    inline float windowFunc(int n, int outputSize, int overlapWidth, float invOverlap);
 };
 
 inline void GranularPitchShifter::processBlock(float *buffer, const int numSamples)
@@ -203,6 +203,7 @@ inline float GranularPitchShifter::processOutputBuffers(float modulation_smpls, 
 
     auto txt = texture.getNextValue();
     int overlapWidth = (int) (currentOutputSize * txt * 0.5f);
+    float invOverlap = overlapWidth != 0 ? 1.0f / static_cast<float>(overlapWidth) : 0.0f;
     int stride = currentOutputSize - overlapWidth - 1;
 
     if (triggerStrech)
@@ -266,7 +267,7 @@ inline float GranularPitchShifter::processOutputBuffers(float modulation_smpls, 
     auto o1OutFwd = 0.0f;
     if (output1ReadIdx < currentOutputSize)
     {
-        auto win = windowFunc(output1ReadIdx, currentOutputSize, overlapWidth);
+        auto win = windowFunc(output1ReadIdx, currentOutputSize, overlapWidth, invOverlap);
         auto grainStart = output1StretchMultiplier * currentOutputSize + output1ReadOffset;
         o1OutRev = outputBuffer.readBuffer(grainStart - currentOutputSize + output1ReadIdx + 1) * win;
         o1OutFwd = outputBuffer.readBuffer(grainStart - output1ReadIdx) * win;
@@ -278,7 +279,7 @@ inline float GranularPitchShifter::processOutputBuffers(float modulation_smpls, 
     auto o2OutFwd = 0.0f;
     if (output2ReadIdx < currentOutputSize)
     {
-        auto win = windowFunc(output2ReadIdx, currentOutputSize, overlapWidth);
+        auto win = windowFunc(output2ReadIdx, currentOutputSize, overlapWidth, invOverlap);
         auto grainStart = output2StretchMultiplier * currentOutputSize + output2ReadOffset;
         o2OutRev = outputBuffer.readBuffer(grainStart - currentOutputSize + output2ReadIdx + 1) * win;
         o2OutFwd = outputBuffer.readBuffer(grainStart - output2ReadIdx) * win;
@@ -357,16 +358,16 @@ inline void GranularPitchShifter::resample(float inputSize, int outputSize, floa
     }
 }
 
-inline float GranularPitchShifter::windowFunc(int n, int outputSize, int overlapWidth)
+inline float GranularPitchShifter::windowFunc(int n, int outputSize, int overlapWidth, float invOverlap)
 {
     float w = 1.0f;
     if (n < overlapWidth)
     {
-        w = static_cast<float>(n) / static_cast<float>(overlapWidth);
+        w = static_cast<float>(n) * invOverlap;
     }
     else if (n >= outputSize - overlapWidth)
     {
-        w = static_cast<float>(outputSize - n - 1) / static_cast<float>(overlapWidth);
+        w = static_cast<float>(outputSize - n - 1) * invOverlap;
     }
     return w;
 }
