@@ -19,9 +19,7 @@ int main() {
     PitchShifterContainer c[2]; DryWetMixer m[2];
     for (int ch=0;ch<2;++ch){
         c[ch].reset(fs); m[ch].prepare(fs); m[ch].setWetProportion(0.5f);
-        c[ch].setRouting(0.f,0.f,0.5f);
         c[ch].setPs1Parameters(50.f,-12.f,0.f,0.5f,1.f,30.f,0.f,22000.f,FORWARD,DIGITAL);
-        c[ch].setPs2Parameters(50.f,7.f,0.f,0.5f,1.f,30.f,0.f,22000.f,FORWARD,DIGITAL);
         c[ch].setModParams(0.02f,0.f,FastMathLFO::SIN,0.f);
     }
     std::vector<float> inb((size_t)N), wb((size_t)N);

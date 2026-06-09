@@ -14,9 +14,7 @@
 
 static void configDefault(graindr::PitchShifterContainer& c){
     using namespace graindr;
-    c.setRouting(0.0f, 0.0f, 0.5f);
     c.setPs1Parameters(50.f,0.f,0.f,0.5f,1.f,0.f,0.f,22000.f, FORWARD, DIGITAL);
-    c.setPs2Parameters(50.f,0.f,0.f,0.5f,1.f,0.f,0.f,22000.f, FORWARD, DIGITAL);
 }
 int main() {
     using namespace graindr;

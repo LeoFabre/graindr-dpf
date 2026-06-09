@@ -8,6 +8,9 @@
 
 namespace graindr {
 
+// Single granular delay line. (A second line / PS2 + the PS1/PS2 routing was
+// removed — production only ever used one line, and processing a second was
+// pure wasted CPU. ~2x cheaper, deterministic cost, no per-sample branch.)
 class PitchShifterContainer
 {
 public:
@@ -18,18 +21,13 @@ public:
         fs = sampleRate;
 
         ps1.reset(fs);
-        ps2.reset(fs);
-
-        ps1InBalance.reset(fs, 0.1f);
-        ps2InBalance.reset(fs, 0.1f);
-        ps12OutBalance.reset(fs, 0.1f);
 
         lfoPhaseShift.reset(fs, 0.1f);
         lfo.reset(fs);
         maxModDepth_smpls = MAX_MOD_DEPTH_SECS * fs;
 
         resetEnvelopeDetectorBlock();
-        envelopeDetectorActive = ps1.isStreching() || ps2.isStreching();
+        envelopeDetectorActive = ps1.isStreching();
     }
 
     void processBlock(float* buffer, const int numSamples)
@@ -39,7 +37,7 @@ public:
             auto x = buffer[n];
 
             bool triggerStrech = false;
-            updateEnvelopeDetectorState(ps1.isStreching() || ps2.isStreching());
+            updateEnvelopeDetectorState(ps1.isStreching());
             if (envelopeDetectorActive)
             {
                 auto envlpIn = preDetectorFilter.processSample(x);
@@ -62,42 +60,17 @@ public:
 
             auto modulation_smpls = lfo.getNextSample(lfoPhaseShift.getNextValue()) * maxModDepth_smpls;
 
-            // PS 1 process
             auto ps1OutputBuffersOut = ps1.processOutputBuffers(modulation_smpls, triggerStrech);
             auto ps1PostDelOut = ps1.processPostDelay(ps1OutputBuffersOut, modulation_smpls);
+            ps1.writeInputBuffer(x, ps1OutputBuffersOut);
 
-            // PS 2 process
-            auto ps2OutputBuffersOut = ps2.processOutputBuffers(modulation_smpls, triggerStrech);
-            auto ps2PostDelOut = ps2.processPostDelay(ps2OutputBuffersOut, modulation_smpls);
-
-            // PS 1 write
-            auto ps1InBal = ps1InBalance.getNextValue();
-            ps1.writeInputBuffer((1.0f - ps1InBal) * x + ps1InBal * ps2OutputBuffersOut, ps1OutputBuffersOut);
-
-            // PS 2 write
-            auto ps2InBal = ps2InBalance.getNextValue();
-            ps2.writeInputBuffer((1.0f - ps2InBal) * x + ps2InBal * ps1OutputBuffersOut, ps2OutputBuffersOut);
-
-            auto outBal = ps12OutBalance.getNextValue();
-            buffer[n] = (1.0f - outBal) * ps1PostDelOut + outBal * ps2PostDelOut;
+            buffer[n] = ps1PostDelOut;
         }
-    }
-
-    void setRouting(float _ps1InBalance, float _ps2InBalance, float _ps12OutBalance)
-    {
-        ps1InBalance.setTargetValue(_ps1InBalance);
-        ps2InBalance.setTargetValue(_ps2InBalance);
-        ps12OutBalance.setTargetValue(_ps12OutBalance);
     }
 
     void setPs1Parameters(float grainSize_ms, float pitchShift, float fineTune, float texture, float strech, float feedback, float shimmer, float shimmerHiCut_Hz, PlaybackDirection playbackDir, ToneType toneType)
     {
         ps1.setParameters(grainSize_ms, pitchShift, fineTune, texture, strech, feedback, shimmer, shimmerHiCut_Hz, playbackDir, toneType);
-    }
-
-    void setPs2Parameters(float grainSize_ms, float pitchShift, float fineTune, float texture, float strech, float feedback, float shimmer, float shimmerHiCut_Hz, PlaybackDirection playbackDir, ToneType toneType)
-    {
-        ps2.setParameters(grainSize_ms, pitchShift, fineTune, texture, strech, feedback, shimmer, shimmerHiCut_Hz, playbackDir, toneType);
     }
 
     void setModParams(float freq, float depth, FastMathLFO::LFOWave wave, float phaseShift)
@@ -115,11 +88,6 @@ private:
     float maxModDepth_smpls = MAX_MOD_DEPTH_SECS * 44100.0f;
 
     GranularPitchShifter ps1;
-    GranularPitchShifter ps2;
-
-    SmoothedValueLinear ps1InBalance{0.0f};
-    SmoothedValueLinear ps2InBalance{0.0f};
-    SmoothedValueLinear ps12OutBalance{0.5f};
 
     bool envelopeDetectorActive = false;
 
@@ -144,14 +112,12 @@ private:
         if (envelopeDetectorActive == activate)
             return;
 
-        // deactivate
         if (envelopeDetectorActive && !activate)
         {
             envelopeDetectorActive = false;
             return;
         }
 
-        // activate
         resetEnvelopeDetectorBlock();
         envelopeDetectorActive = true;
     }

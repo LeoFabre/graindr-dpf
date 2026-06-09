@@ -28,9 +28,6 @@ void GraindrPlugin::initParameter(uint32_t index, Parameter& p) {
     };
     switch (index) {
         case kParamDryWet:        setNS("Dry/Wet","dryWet",""); return;
-        case kParamPs1InBalance:  setNS("PS 1 In","ps1InBalance",""); return;
-        case kParamPs2InBalance:  setNS("PS 2 In","ps2InBalance",""); return;
-        case kParamPsBalance:     setNS("PS Balance","psBalance",""); return;
         case kParamModFreq:       setNS("Mod Freq","psModFreq","Hz"); return;
         case kParamModDepth:      setNS("Mod Depth","psModDepth","%"); return;
         case kParamModStereoPhase:setNS("Mod Stereo Phase","psModStereoPhase","Deg"); return;
@@ -43,14 +40,13 @@ void GraindrPlugin::initParameter(uint32_t index, Parameter& p) {
         }
         default: break;
     }
-    for (uint32_t psn = 0; psn < 2; ++psn) {
-        const uint32_t base = (psn==0)? (uint32_t)kParamPs1Base : (uint32_t)kParamPs2Base;
+    {
+        const uint32_t base = (uint32_t)kParamPs1Base;
         if (index >= base && index < base + 10) {
             const uint32_t f = index - base;
-            const int n = (int)psn + 1;
             auto mk = [&](const char* label, const char* symbase, const char* unit){
-                std::snprintf(name,sizeof name,"PS%d %s", n, label);
-                std::snprintf(sym, sizeof sym, "ps%d%s", n, symbase);
+                std::snprintf(name,sizeof name,"PS1 %s", label);
+                std::snprintf(sym, sizeof sym, "ps1%s", symbase);
                 p.name = name; p.symbol = sym; p.unit = unit;
             };
             switch (f) {
@@ -100,9 +96,6 @@ void GraindrPlugin::activate() {
 void GraindrPlugin::pushParamsToDsp() {
     for (int ch=0; ch<2; ++ch) {
         dwMixer_[ch].setWetProportion(paramValues_[kParamDryWet]);
-        container_[ch].setRouting(paramValues_[kParamPs1InBalance],
-                                  paramValues_[kParamPs2InBalance],
-                                  paramValues_[kParamPsBalance]);
         auto setPs = [&](uint32_t base, auto setter){
             setter(paramValues_[base+kPsGrainSize], paramValues_[base+kPsPitchShift],
                    paramValues_[base+kPsFineTune],  paramValues_[base+kPsTexture],
@@ -113,8 +106,6 @@ void GraindrPlugin::pushParamsToDsp() {
         };
         setPs(kParamPs1Base, [&](float a,float b,float c,float d,float e,float f,float g,float h,PlaybackDirection i,ToneType j){
             container_[ch].setPs1Parameters(a,b,c,d,e,f,g,h,i,j); });
-        setPs(kParamPs2Base, [&](float a,float b,float c,float d,float e,float f,float g,float h,PlaybackDirection i,ToneType j){
-            container_[ch].setPs2Parameters(a,b,c,d,e,f,g,h,i,j); });
         const float phase = (ch == 0) ? 0.0f : paramValues_[kParamModStereoPhase];
         container_[ch].setModParams(paramValues_[kParamModFreq], paramValues_[kParamModDepth],
                                     (FastMathLFO::LFOWave)(int)paramValues_[kParamModWave], phase);

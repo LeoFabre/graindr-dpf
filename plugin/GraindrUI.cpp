@@ -7,31 +7,21 @@ START_NAMESPACE_DISTRHO
 
 using DGL_NAMESPACE::Color;
 
-// Short labels for all 28 params, in ParamId order.
+// Short labels for all params, in ParamId order (single granular line).
 static const char* kLabels[graindr::kNumParameters] = {
     // 0: kParamDryWet
     "Dry/Wet",
-    // 1: kParamPs1InBalance
-    "PS1 In",
-    // 2: kParamPs2InBalance
-    "PS2 In",
-    // 3: kParamPsBalance
-    "PS Bal",
-    // 4-13: PS1 block
+    // 1-10: PS1 block
     "P1 Pitch", "P1 Fine", "P1 Grain", "P1 Tex",
     "P1 Str", "P1 Fbk", "P1 Shim", "P1 ShCut",
     "P1 Dir", "P1 Tone",
-    // 14-23: PS2 block
-    "P2 Pitch", "P2 Fine", "P2 Grain", "P2 Tex",
-    "P2 Str", "P2 Fbk", "P2 Shim", "P2 ShCut",
-    "P2 Dir", "P2 Tone",
-    // 24: kParamModFreq
+    // 11: kParamModFreq
     "Mod Frq",
-    // 25: kParamModDepth
+    // 12: kParamModDepth
     "Mod Dep",
-    // 26: kParamModWave
+    // 13: kParamModWave
     "Mod Wav",
-    // 27: kParamModStereoPhase
+    // 14: kParamModStereoPhase
     "Mod Ph",
 };
 
@@ -88,7 +78,7 @@ void GraindrUI::onNanoDisplay()
     // Section labels
     fontSize(11.f);
     fillColor(Color(140, 140, 160));
-    text(14.f, 44.f, "Global (0-3)  |  PS1 (4-13)  |  PS2 (14-23)  |  Mod (24-27)", nullptr);
+    text(14.f, 44.f, "Global (0)  |  PS1 (1-10)  |  Mod (11-14)", nullptr);
 
     // Draw all knobs
     for (const auto& k : knobs_)
