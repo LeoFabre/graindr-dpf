@@ -336,14 +336,36 @@ inline void GranularPitchShifter::resample(float inputSize, int outputSize, floa
     for (int i = 0; i < outputSize; i++)
     {
         float delay = inputSize - static_cast<float>(currPos);
-        float y = inputBuffer.readBuffer(delay);
+
+        // Fast path: `delay - currPos` has a constant fractional part across the whole
+        // grain (frac(inputSize)). When it is exactly 0, the cubic float-delay overload
+        // reduces bit-exactly to its y1 term (every fraction-scaled term is *0.0f), so a
+        // single integer-delay read returns the identical value at ~1/5 the cost. With an
+        // integral pitch factor (e.g. unity) this covers every iteration of the grain.
+        const int delayInt = (int) delay;
+        const bool integerDelay = (delay - static_cast<float>(delayInt)) == 0.0f;
+
+        float y = integerDelay ? inputBuffer.readBuffer(delayInt)
+                               : inputBuffer.readBuffer(delay);
 
         if (phasor != 0.0f)
         {
-            float y0 = inputBuffer.readBuffer(delay + 1.0f);
+            // delay +/- k keeps the fractional part (exact float ops on |delay| << 2^23),
+            // so the same fraction-0 reduction applies to the three neighbour reads.
+            float y0, y2, y3;
+            if (integerDelay)
+            {
+                y0 = inputBuffer.readBuffer(delayInt + 1);
+                y2 = inputBuffer.readBuffer(delayInt - 1);
+                y3 = inputBuffer.readBuffer(delayInt - 2);
+            }
+            else
+            {
+                y0 = inputBuffer.readBuffer(delay + 1.0f);
+                y2 = inputBuffer.readBuffer(delay - 1.0f);
+                y3 = inputBuffer.readBuffer(delay - 2.0f);
+            }
             float y1 = y;
-            float y2 = inputBuffer.readBuffer(delay - 1.0f);
-            float y3 = inputBuffer.readBuffer(delay - 2.0f);
 
             y = cubicInterpolation(y0, y1, y2, y3, phasor);
         }
