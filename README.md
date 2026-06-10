@@ -1,9 +1,12 @@
 # graindr-dpf
 
 A DPF (DISTRHO Plugin Framework) port of [Graindr](https://github.com/LeoFabre/Graindr)
-— a dual granular pitch-shifter / time-stretcher / feedback-delay — built to run headless
+— a single granular pitch-shifter / time-stretcher / feedback-delay — built to run headless
 in [Sushi](https://github.com/elk-audio/sushi) on Bela (PocketBeagle2) with a far smaller
 footprint than the original JUCE build. Stereo in / stereo out, VST3 + LV2.
+
+The second granular line (PS2) was removed for real-time determinism; see
+[OPTIMIZATIONS.md](OPTIMIZATIONS.md) for details.
 
 ## Layout
 
@@ -20,12 +23,27 @@ exactly: `FastMath` (JUCE Padé sin/tan), `SmoothedValue` (Linear + Multiplicati
 and `DryWetMixer` (sin3dB equal-power crossfade). See
 `docs/superpowers/specs/2026-06-07-graindr-juce-to-dpf-design.md` in the parent repo.
 
-## Parameters (28)
+## Parameters (15)
 
-4 routing (dry/wet, PS1/PS2 in-balance, PS balance) · 10 per pitch-shifter ×2
-(pitch, fine-tune, grain size, texture, stretch, feedback, shimmer, shimmer hi-cut,
-playback dir, tone) · 4 modulation (freq, depth, wave, stereo phase). State is auto-saved
-by DPF (no XML).
+1 dry/wet · 10 PS1 (single granular line) · 4 modulation. State is auto-saved by DPF (no XML).
+
+| Index | Symbol | Name | Range | Default | Unit |
+|------:|--------|------|-------|---------|------|
+| 0 | `dryWet` | Dry/Wet | 0 – 1 | 0.5 | — |
+| 1 | `ps1PitchShift` | PS1 Pitch Shift | −12 – 12 | 0 | semitones |
+| 2 | `ps1FineTune` | PS1 Fine Tune | −100 – 100 | 0 | cents |
+| 3 | `ps1GrainSize` | PS1 Grain Size | 1 – 1000 | 50 | ms |
+| 4 | `ps1Texture` | PS1 Texture | 0 – 1 | 0.5 | — |
+| 5 | `ps1Stretch` | PS1 Stretch | 1 – 4 | 1 | — |
+| 6 | `ps1Feedback` | PS1 Feedback | 0 – 100 | 0 | % |
+| 7 | `ps1Shimmer` | PS1 Shimmer | 0 – 100 | 0 | % |
+| 8 | `ps1ShimmerHiCut` | PS1 Hi Cut | 20 – 22000 | 22000 | Hz |
+| 9 | `ps1PlaybackDir` | PS1 Playback | 0 FORWARD / 1 REVERSE / 2 ALTERNATE | 0 | — |
+| 10 | `ps1ToneType` | PS1 Tone | 0 ANALOG / 1 DIGITAL | 1 | — |
+| 11 | `psModFreq` | Mod Freq | 0.02 – 10 | 0.02 | Hz |
+| 12 | `psModDepth` | Mod Depth | 0 – 100 | 0 | % |
+| 13 | `psModWave` | Mod Wave | 0 SIN / 1 TRI / 2 SAW / 3 RMP / 4 SQR / 5 S&H | 0 | — |
+| 14 | `psModStereoPhase` | Mod Stereo Phase | 0 – 180 | 0 | deg |
 
 ## Build
 
