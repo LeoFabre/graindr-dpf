@@ -43,6 +43,13 @@ public:
 
     int getWriteIndex() { return (int) writeIndex; }
 
+    // Deferred-production support: advance the head as if `n` samples had been
+    // written (their slots become addressable by delay-relative reads), then fill
+    // the reserved slots later with absolute-indexed writes. Equivalent to `n`
+    // writeBuffer() calls once every reserved slot has been filled.
+    void advanceWriteIndex(int n) { writeIndex = (writeIndex + (unsigned int) n) & wrapMask; }
+    void writeAtIndex(unsigned int absoluteIndex, float input) { buffer[absoluteIndex & wrapMask] = input; }
+
 private:
     std::unique_ptr<float[]> buffer = nullptr;
     unsigned int writeIndex = 0;
