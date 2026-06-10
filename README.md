@@ -50,7 +50,7 @@ The UI is a minimal grid-of-knobs debug aid, not a reproduction of the JUCE GUI.
 
 ### Cross-compile for Bela (aarch64), headless
 
-From the parent `nexus-preamp/`:
+From the parent integration repo:
 
 ```bash
 ./cross-build-dpf-plugin.sh plugins/graindr-dpf          # headless (default)
@@ -82,6 +82,10 @@ Output: `build-arm64/graindr-dpf/Graindr.vst3` and `Graindr.lv2`. Requires Docke
 See [`test/README.md`](test/README.md). Acceptance: peak residual ≤ −80 dB vs the JUCE
 original (relaxable to −60 dB with a documented reason). Both presets use `psModDepth=0`
 so the deliberately non-bit-faithful S&H RNG path is never exercised in the comparison.
+
+## Performance
+
+See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for the Cortex-A53 optimization work, the PS2 removal, and measured gains.
 
 ## License
 
