@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cmath>
+#include <memory>
+#ifndef NDEBUG
+#include <cassert>
+#endif
 #include "DspMath.hpp"
 #include "CircularBuffer.hpp"
 #include "SmoothedValue.hpp"
@@ -58,6 +62,18 @@ public:
 
         writtenSmplsCtr = 0;
         stretchCtr = 0;
+
+        grainProducing = false;
+        grainReverseOrder = false;
+        grainElapsed = 0;
+        grainQuota = 0;
+        grainFrontIdx = 0;
+        grainBackIdx = -1;
+        grainPhasor = 0.0f;
+        grainCurrPos = 0;
+        grainSeqCapacity = maxOutputBufferSize + kGrainHazard;
+        grainSeqPhasor.reset(new float[grainSeqCapacity]);
+        grainSeqPos.reset(new int[grainSeqCapacity]);
 
         output1ReadIdx = 0;
         output1ReadOffset = 0;
@@ -180,7 +196,79 @@ private:
         return std::tanh(x);
     }
 
-    inline void resample(float inputSize, int outputSize, float factor);
+    // ---- Amortized grain production (flat WCET) -------------------------------------
+    //
+    // The original resample() rebuilt the whole grain (outputSize cubic reads, ~2205 at
+    // defaults) inside ONE sample tick, a ~300 us burst every stride+1 samples on the
+    // A53. It is replaced by incremental production: the event LATCHES everything the
+    // grain depends on (sizes, factor, the input write-head position) and the grain is
+    // then produced K samples per tick into the same outputBuffer slots, with identical
+    // float operations in identical order, so the result is bit-identical.
+    //
+    // Source reads: the input head advances by 1 per tick after the event, so a read
+    // that resample() would have done at integer delay d is done at d + grainElapsed —
+    // the same buffer cell with unchanged content (the cell is only rewritten after
+    // bufferLength = nextPow2(4*fs) further writes; max d + elapsed <= 2.12*fs + 3 + fs
+    // < 4*fs, so it never is). The fractional part is computed from the SAME float
+    // expression as before (never from d + elapsed, which could round differently).
+    // The only cells that DO change under the head are the ones resample() read at
+    // non-positive event-time delay (the "future wrap" reads of the cubic tail, integer
+    // delays >= -3): those are latched into grainHazard[] at the event.
+    //
+    // Safety of deferred output writes (readers must never see an unproduced slot):
+    // the fresh grain occupies head-relative delays [1, outputSize] (slot i at delay
+    // outputSize - i; the head is advanced by outputSize at the event, exactly where
+    // the original left it, so getWriteIndex() and all reader delays are unchanged).
+    //  * The only output that touches that region immediately is the one reset at this
+    //    event with stretch multiplier 1: it reads slot e (forward) or slot
+    //    outputSize-1-e (reverse) at tick e after the event. Production runs before
+    //    the readers each tick, in the matching direction, so after tick e it has
+    //    produced at least K*(e+1) >= e+1 slots from that end: always ahead for K >= 1.
+    //  * The non-reset output reads delays >= outputSize + 1 (its readOffset is
+    //    outputSize), and a reset output with multiplier >= 2 reads delays
+    //    >= outputSize + 1 too: both outside the fresh region (at event-time sizes).
+    //  * K = ceil(outputSize/(stride+1)) + 1 completes production strictly before the
+    //    next event (period stride+1 ticks at event-time parameters), so back-to-back
+    //    grains never overlap in steady state. Defaults: ceil(2205/1654)+1 = 3.
+    //  * Parameter smoothing can break the static assumptions (stride shrinking ->
+    //    earlier event; outputSize drifting -> reader delays slide into the fresh
+    //    region). Two fallbacks keep bit-identity unconditionally: a new event first
+    //    burst-completes any in-flight grain (production time does not affect values,
+    //    only the latched state does), and a per-tick guard recomputes the exact
+    //    delays the SELECTED reads will use this tick and catch-up produces if one
+    //    lands beyond the produced range (covers playbackDir flips mid-grain too).
+    //
+    // Reverse-order production needs the per-iteration (phasor, currPos) recurrence
+    // state at arbitrary iterations; the recurrence is float-rounding-sensitive and only
+    // steps forward, so it is precomputed into grainSeq* at the event (a few cheap ops
+    // per iteration, ~50x lighter than the cubic reads it replaces).
+    static constexpr int kGrainHazard = 8;
+
+    bool grainProducing = false;
+    bool grainReverseOrder = false;
+    float grainInputSize = 0.0f;
+    int grainOutputSize = 0;
+    float grainFactor = 0.0f;
+    int grainQuota = 0;            // K = per-tick production quota
+    int grainElapsed = 0;          // input writes since the latch event
+    unsigned int grainBase = 0;    // outputBuffer slot of grain sample 0
+    int grainFrontIdx = 0;         // forward order: next slot to produce
+    float grainPhasor = 0.0f;      // forward-order recurrence cursor
+    int grainCurrPos = 0;
+    int grainBackIdx = -1;         // reverse order: next slot to produce (descending)
+    float grainHazard[kGrainHazard] = {};
+    int grainSeqCapacity = 0;
+    std::unique_ptr<float[]> grainSeqPhasor;
+    std::unique_ptr<int[]> grainSeqPos;
+
+    inline void startGrainProduction(float inputSize, int outputSize, float factor, int stride);
+    inline void prepareReverseOrderProduction();
+    inline void produceGrainStep();
+    inline float produceGrainValue(float phasorVal, int currPosVal);
+    inline float readGrainSource(float delay);
+    inline float readGrainSourceInt(int delaySmpls);
+    inline void guardFreshRead(int readIdx, int multiplier, int readOffset, bool readsReverse);
+
     inline float windowFunc(int n, int outputSize, int overlapWidth, float invOverlap);
 };
 
@@ -226,9 +314,12 @@ inline float GranularPitchShifter::processOutputBuffers(float modulation_smpls, 
         }
         stretch = nextStretch;
 
-        resample(currentInputSize, currentOutputSize, totalPitchFactor);
+        startGrainProduction(currentInputSize, currentOutputSize, totalPitchFactor, stride);
+
+        int resetOutput = 0;
         if (output1ReadIdx >= currentOutputSize)
         {
+            resetOutput = 1;
             output1ReadIdx = 0;
             output1ReadOffset = 0;
             output2ReadOffset = currentOutputSize;
@@ -246,6 +337,7 @@ inline float GranularPitchShifter::processOutputBuffers(float modulation_smpls, 
         }
         else if (output2ReadIdx >= currentOutputSize)
         {
+            resetOutput = 2;
             output2ReadIdx = 0;
             output2ReadOffset = 0;
             output1ReadOffset = currentOutputSize;
@@ -261,6 +353,35 @@ inline float GranularPitchShifter::processOutputBuffers(float modulation_smpls, 
 
             output2TriggerStretchOnNext = false;
         }
+
+        // Produce back-to-front iff the output that will start reading the fresh grain
+        // immediately (just reset, multiplier 1 -> grainStart == currentOutputSize)
+        // consumes it in reverse; otherwise nothing reads the fresh region before the
+        // per-tick guards below would catch it, and forward order is cheapest.
+        bool freshReadReverse = false;
+        if (resetOutput == 1 && output1StretchMultiplier == 1)
+            freshReadReverse = (playbackDir == PlaybackDirection::REVERSE);
+        else if (resetOutput == 2 && output2StretchMultiplier == 1)
+            freshReadReverse = (playbackDir != PlaybackDirection::FORWARD);
+        if (freshReadReverse)
+            prepareReverseOrderProduction();
+    }
+
+    if (grainProducing)
+    {
+        for (int k = 0; k < grainQuota && grainProducing; ++k)
+            produceGrainStep();
+
+        // Guard: if a SELECTED read this tick lands in the not-yet-produced part of the
+        // fresh grain (possible only under parameter drift or a playbackDir change
+        // mid-production), catch up to it now. Recomputes exactly the delays used by
+        // the read code below.
+        if (grainProducing)
+            guardFreshRead(output1ReadIdx, output1StretchMultiplier, output1ReadOffset,
+                           playbackDir == PlaybackDirection::REVERSE);
+        if (grainProducing)
+            guardFreshRead(output2ReadIdx, output2StretchMultiplier, output2ReadOffset,
+                           playbackDir != PlaybackDirection::FORWARD);
     }
 
     auto o1OutRev = 0.0f;
@@ -329,33 +450,162 @@ inline float GranularPitchShifter::processSample(float x, float modulation_smpls
     return y;
 }
 
-inline void GranularPitchShifter::resample(float inputSize, int outputSize, float factor)
+inline void GranularPitchShifter::startGrainProduction(float inputSize, int outputSize, float factor, int stride)
 {
-    float phasor = 0.0f;
-    int currPos = 0;
-    for (int i = 0; i < outputSize; i++)
+    // A previous grain still in flight (possible when parameter ramps shrink the stride
+    // below the production window) is completed now: the produced values depend only on
+    // the latched event state, never on WHEN the production steps run.
+    while (grainProducing)
+        produceGrainStep();
+
+    // Advance the head as if the whole grain had been written here (the original
+    // resample() did exactly that), so getWriteIndex() and every head-relative reader
+    // delay are unchanged. The reserved slots are filled incrementally below/later.
+    grainBase = (unsigned int) outputBuffer.getWriteIndex();
+    outputBuffer.advanceWriteIndex(outputSize);
+
+    if (outputSize <= 0)
+        return;
+
+    grainInputSize = inputSize;
+    grainOutputSize = outputSize;
+    grainFactor = factor;
+    grainElapsed = 0;
+    grainFrontIdx = 0;
+    grainPhasor = 0.0f;
+    grainCurrPos = 0;
+    grainReverseOrder = false;
+    grainProducing = true;
+
+    // K: completes the grain strictly before the next event (period = stride+1 ticks at
+    // event-time parameters), +1 margin. Defaults: ceil(2205/1654) + 1 = 3 steps/tick.
+    const int period = stride + 1 > 0 ? stride + 1 : 1;
+    grainQuota = (outputSize + period - 1) / period + 1;
+
+    // Latch the input cells the grain tail reads at non-positive event-time delay (the
+    // cubic neighbourhood can reach integer delay -3); post-event writes overwrite
+    // those cells within a few ticks, so they must be captured now.
+    for (int k = 0; k < kGrainHazard; ++k)
+        grainHazard[k] = inputBuffer.readBuffer(-k);
+}
+
+inline void GranularPitchShifter::prepareReverseOrderProduction()
+{
+    if (!grainProducing || grainOutputSize > grainSeqCapacity)
+        return; // oversized grain: stay in forward order (guards burst if ever read early)
+
+    // The (phasor, currPos) recurrence is float-rounding-sensitive and only steps
+    // forward; precompute it so slots can be produced back-to-front bit-identically.
+    float ph = 0.0f;
+    int cp = 0;
+    for (int i = 0; i < grainOutputSize; ++i)
     {
-        float delay = inputSize - static_cast<float>(currPos);
-        float y = inputBuffer.readBuffer(delay);
-
-        if (phasor != 0.0f)
+        grainSeqPhasor[i] = ph;
+        grainSeqPos[i] = cp;
+        ph += grainFactor;
+        while (ph >= 1.0f)
         {
-            float y0 = inputBuffer.readBuffer(delay + 1.0f);
-            float y1 = y;
-            float y2 = inputBuffer.readBuffer(delay - 1.0f);
-            float y3 = inputBuffer.readBuffer(delay - 2.0f);
-
-            y = cubicInterpolation(y0, y1, y2, y3, phasor);
-        }
-
-        outputBuffer.writeBuffer(y);
-        phasor += factor;
-        while (phasor >= 1.0f)
-        {
-            phasor -= 1.0f;
-            currPos++;
+            ph -= 1.0f;
+            cp++;
         }
     }
+    grainReverseOrder = true;
+    grainBackIdx = grainOutputSize - 1;
+}
+
+inline void GranularPitchShifter::produceGrainStep()
+{
+    if (grainReverseOrder)
+    {
+        const int j = grainBackIdx;
+        outputBuffer.writeAtIndex(grainBase + (unsigned int) j,
+                                  produceGrainValue(grainSeqPhasor[j], grainSeqPos[j]));
+        if (--grainBackIdx < 0)
+            grainProducing = false;
+    }
+    else
+    {
+        outputBuffer.writeAtIndex(grainBase + (unsigned int) grainFrontIdx,
+                                  produceGrainValue(grainPhasor, grainCurrPos));
+        grainPhasor += grainFactor;
+        while (grainPhasor >= 1.0f)
+        {
+            grainPhasor -= 1.0f;
+            grainCurrPos++;
+        }
+        if (++grainFrontIdx >= grainOutputSize)
+            grainProducing = false;
+    }
+}
+
+// One grain sample, bit-identical to the original resample() loop body.
+inline float GranularPitchShifter::produceGrainValue(float phasorVal, int currPosVal)
+{
+    float delay = grainInputSize - static_cast<float>(currPosVal);
+    float y = readGrainSource(delay);
+
+    if (phasorVal != 0.0f)
+    {
+        float y0 = readGrainSource(delay + 1.0f);
+        float y1 = y;
+        float y2 = readGrainSource(delay - 1.0f);
+        float y3 = readGrainSource(delay - 2.0f);
+
+        y = cubicInterpolation(y0, y1, y2, y3, phasorVal);
+    }
+    return y;
+}
+
+// Replicates CircularBuffer::readBuffer(float) against the EVENT-TIME buffer content.
+// The fraction comes from the same float expression as the original (never recomputed
+// from an elapsed-compensated value, which could round differently).
+inline float GranularPitchShifter::readGrainSource(float delay)
+{
+    const int delayInt = (int) delay;
+    const float fraction = delay - static_cast<float>(delayInt);
+    if (fraction == 0.0f) // fast path: Catmull-Rom at t=0 is exactly y1
+        return readGrainSourceInt(delayInt);
+
+    float y1 = readGrainSourceInt(delayInt);
+    float y2 = readGrainSourceInt(delayInt + 1);
+    float y0 = readGrainSourceInt(delayInt - 1);
+    float y3 = readGrainSourceInt(delayInt + 2);
+    return cubicInterpolation(y0, y1, y2, y3, fraction);
+}
+
+inline float GranularPitchShifter::readGrainSourceInt(int delaySmpls)
+{
+    if (delaySmpls <= 0)
+    {
+        // Event-time "future wrap" cells: already overwritten by post-event input
+        // writes, served from the latch instead.
+#ifndef NDEBUG
+        assert(-delaySmpls < kGrainHazard);
+#endif
+        return grainHazard[-delaySmpls];
+    }
+    // The head advanced by grainElapsed since the event; same cell, unchanged content.
+    return inputBuffer.readBuffer(delaySmpls + grainElapsed);
+}
+
+inline void GranularPitchShifter::guardFreshRead(int readIdx, int multiplier, int readOffset, bool readsReverse)
+{
+    if (readIdx >= currentOutputSize)
+        return; // this output reads nothing this tick
+
+    const int grainStart = multiplier * currentOutputSize + readOffset;
+    const int d = readsReverse ? (grainStart - currentOutputSize + readIdx + 1)
+                               : (grainStart - readIdx);
+    if (d < 1 || d > grainOutputSize)
+        return; // the read lands outside the fresh grain region
+
+    const int slot = grainOutputSize - d;
+    if (grainReverseOrder)
+        while (grainProducing && grainBackIdx >= slot)
+            produceGrainStep();
+    else
+        while (grainProducing && grainFrontIdx <= slot)
+            produceGrainStep();
 }
 
 inline float GranularPitchShifter::windowFunc(int n, int outputSize, int overlapWidth, float invOverlap)
@@ -376,6 +626,8 @@ inline void GranularPitchShifter::writeInputBuffer(float x, float feedbackIn)
 {
     inputBuffer.writeBuffer(x + shimmer.getNextValue() * feedbackIn);
     writtenSmplsCtr++;
+    if (grainProducing)
+        grainElapsed++;
 }
 
 } // namespace graindr
