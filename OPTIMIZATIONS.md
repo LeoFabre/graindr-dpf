@@ -93,3 +93,31 @@ flexibility for worst-case-execution-time determinism in the audio callback.
 - **Unit tests**: the FastMath tests assert accuracy, monotonicity, boundedness
   and hard-saturation behavior of the Padé tanh.
 - **Real-device benchmarks**: ns/sample and xRT measured on the Cortex-A53 itself.
+
+## WCET flattening: amortized grain production (2026-06)
+
+Profiling the production graph at 32-sample buffers showed periodic underruns
+tracing back to this plugin: `resample()` rebuilt an **entire grain
+(~2205 samples at the default 50 ms grain size) in a single sample tick**,
+once per stride (every 1654 samples at defaults). On a Cortex-A53 that burst
+cost ~300 us — ~46 % of a 0.73 ms buffer budget in one chunk, ~10x the
+plugin's average cost, recurring every ~37 ms.
+
+Fixed in two bit-identical stages:
+
+1. **Fraction-0 fast path** — the grain's read fraction is constant per grain;
+   when it is exactly zero, the Catmull-Rom interpolation reduces to its `y1`
+   term, so the cubic read collapses to an integer-delay read.
+2. **Amortized production** — the one-tick rebuild is replaced by latching the
+   grain state at the stride event and producing K samples per tick
+   (K = ceil(outputSize/(stride+1))+1, with burst-complete fallbacks for
+   parameter sweeps that move the event grid). Source reads compensate the
+   advancing write head, so produced samples are bit-identical to the old
+   batch rebuild.
+
+Validation: the A/B regression gate reports bit-identical output (-999 dB) on
+all presets; an extended 23-configuration differential (reverse/alternate,
+stretch, texture and grain-size extremes, mid-stream parameter sweeps, 48 kHz)
+is byte-identical over 5.5 M samples. Host worst-case chunk cost dropped from
+~6.6x median to ~1x (p99.9: 11.6 us -> 1.7 us); on-device steady-state max
+went from 45.7 % to 9.2 % of the buffer budget at 32-sample buffers.
